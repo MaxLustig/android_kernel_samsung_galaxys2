@@ -17,36 +17,56 @@ loglevel 3
     export PATH /sbin:/vendor/bin:/system/sbin:/system/bin:/system/xbin
     export LD_LIBRARY_PATH /vendor/lib:/system/lib
     export ANDROID_BOOTLOGO 1
+    export ANDROID_CACHE /cache
     export ANDROID_ROOT /system
     export ANDROID_ASSETS /system/app
     export ANDROID_DATA /data
+# Export SDCARD---***
+
+    export EXTERNAL_STORAGE /mnt/sdcard
+    export USBHOST_STORAGE /mnt/usbdisk
+    export SECONDARY_STORAGE /mnt/emmc
+
     export ASEC_MOUNTPOINT /mnt/asec
     export LOOP_MOUNTPOINT /mnt/obb
-    export BOOTCLASSPATH /system/framework/core.jar:/system/framework/core-junit.jar:/system/framework/bouncycastle.jar:/system/framework/ext.jar:/system/framework/framework.jar:/system/framework/framework2.jar:/system/framework/android.policy.jar:/system/framework/services.jar:/system/framework/apache-xml.jar:/system/framework/filterfw.jar
+    export BOOTCLASSPATH /system/framework/core.jar:/system/framework/core-junit.jar:/system/framework/bouncycastle.jar:/system/framework/ext.jar:/system/framework/framework.jar:/system/framework/framework2.jar:/system/framework/android.policy.jar:/system/framework/services.jar:/system/framework/apache-xml.jar:/system/framework/filterfw.jar:/system/framework/sechardware.jar:/system/framework/wimax.jar
 
-# Disable CFQ slice idle delay
-    write /sys/block/mmcblk0/queue/iosched/slice_idle 0
-
-# Backward compatibility
+# Backwards compatibility
     symlink /system/etc /etc
     symlink /sys/kernel/debug /d
 
 # Right now vendor lives on the same filesystem as system,
-# but someday that may change.
+# but someday that may change
     symlink /system/vendor /vendor
+
+# create mountpoints
+    mkdir /mnt 0775 root system
+    mkdir /mnt/sdcard 0775 system system
+    mkdir /mnt/emmc 0775 system system
+    mkdir /mnt/usbdisk 0755 system system
 
 # Create cgroup mount point for cpu accounting
     mkdir /acct
     mount cgroup none /acct cpuacct
     mkdir /acct/uid
 
-    mkdir /system
-    mkdir /data 0777 system system
-    mkdir /cache 0777 system cache
-    mkdir /config 0500 root root
-	mkdir /preload 0771 system system
+# add booting sound property
+    setprop audioflinger.bootsnd 1
 
-    # Directory for putting things only root should see.
+# add camera sound property for NA_SPR
+    setprop ro.camera.sound.forced 0
+
+# Backwards compatibility
+    symlink /mnt/sdcard /sdcard
+    symlink /mnt/emmc /emmc
+
+    mkdir /system
+    mkdir /data 0771 system system
+    mkdir /cache 0771 system cache
+    mkdir /config 0500 root root
+    mkdir /preload 0771 system system
+
+    # Directory for putting things only root should see
     mkdir /mnt/secure 0700 root root
 
     # Directory for staging bindmounts
@@ -56,13 +76,21 @@ loglevel 3
     # imagefile directory will be bind-mounted
     mkdir /mnt/secure/asec  0700 root root
 
-    # Secure container public mount points.
+    # Secure container public mount points
     mkdir /mnt/asec  0700 root system
     mount tmpfs tmpfs /mnt/asec mode=0755,gid=1000
 
-    # Filesystem image public mount points.
+    # Filesystem image public mount points
     mkdir /mnt/obb 0700 root system
     mount tmpfs tmpfs /mnt/obb mode=0755,gid=1000
+
+    # USB public mount points
+    mkdir /mnt/usb 0700 root system
+    mount tmpfs tmpfs /mnt/usb mode=0755,gid=1000
+
+    # Browser app memory cache (TW)
+    mkdir /app-cache 0770 system inet
+    mount tmpfs tmpfs /app-cache size=7M
 
     mkdir /mnt/.lfs 0755 root root
 
@@ -93,32 +121,24 @@ loglevel 3
     # 5.0 %
     write /dev/cpuctl/bg_non_interactive/cpu.shares 52
 
-# ko files for FM Radio
-    insmod /lib/modules/Si4709_driver.ko
+# Allow everybody to read the xt_qtaguid resource tracking misc dev
+# This is needed by any process that uses socket tagging
+    chmod 0644 /dev/xt_qtaguid
 
 on fs
 # mount ext4 partitions
     # Mount /system rw first to give the filesystem a chance to save a checkpoint
-    #mount ext4 /dev/block/mmcblk0p9 /system
-    mount ext4 /dev/block/mmcblk0p9 /system noatime wait ro
+    mount ext4 /dev/block/mmcblk0p9 /system noatime nodiratime wait ro
     
-		exec sfsck /dev/block/mmcblk0p7 ext4
-    mount ext4 /dev/block/mmcblk0p7 /cache nosuid nodev noatime wait
+    exec sfsck /dev/block/mmcblk0p7 ext4
+    mount ext4 /dev/block/mmcblk0p7 /cache nosuid nodev noatime nodiratime wait noauto_da_alloc
 
-		exec sfsck /dev/block/mmcblk0p12 ext4
-    mount ext4 /dev/block/mmcblk0p12 /preload nosuid nodev noatime wait
+    #exec sfsck /dev/block/mmcblk0p12 ext4
+    mount ext4 /dev/block/mmcblk0p12 /preload nosuid nodev noatime nodiratime wait ro
     
-    # verfiy filesystem (UMS)
-	  exec sformat /dev/block/mmcblk0p11 vfat
-
-    mount vfat /dev/block/mmcblk0p11 /mnt/sdcard
-
-
-# SEC_DMCRYPT move mounting efs befor apply_disk_policy, and set group id to system
     mkdir /efs
-    #mount rfs /dev/block/mmcblk0p1 /efs nosuid nodev check=no
-	exec sfsck /dev/block/mmcblk0p1 ext4
-    mount ext4 /dev/block/mmcblk0p1 /efs nosuid nodev noatime wait
+    exec sfsck /dev/block/mmcblk0p1 ext4
+    mount ext4 /dev/block/mmcblk0p1 /efs nosuid nodev noatime nodiratime wait
     chown radio system /efs
     chmod 0771 /efs
     mkdir /efs/bluetooth
@@ -128,19 +148,27 @@ on fs
     chmod 0775 /efs/bluetooth
     chmod 0775 /efs/wifi
 
-on post-fs
-	exec sfsck /dev/block/mmcblk0p10 ext4
-    mount ext4 /dev/block/mmcblk0p10 /data nosuid nodev noatime wait noauto_da_alloc
+    # check encryption status, checking UMS & data should be excuted after this command 
+    exec check_encryption_status /dev/block/mmcblk0p10
 
-	# once everything is setup, no need to modify /
+    # verfiy filesystem (UMS)
+    exec sformat /dev/block/mmcblk0p11 vfat
+
+    mount debugfs nil /sys/kernel/debug
+
+on post-fs
+    exec sfsck /dev/block/mmcblk0p10 ext4
+    mount ext4 /dev/block/mmcblk0p10 /data nosuid nodev noatime nodiratime wait noauto_da_alloc
+
+    # once everything is setup, no need to modify /
     mount rootfs rootfs / ro remount
 
     insmod /lib/modules/j4fs.ko
     mount j4fs /dev/block/mmcblk0p4 /mnt/.lfs
 
-    # We chown/chmod /cache again so because mount is run as root + defaults
+    # We chown/chmod /cache again because mount is run as root + defaults
     chown system cache /cache
-    chmod 777 /cache
+    chmod 0771 /cache
 
     # This may have been created by the recovery system with odd permissions
     chown system cache /cache/recovery
@@ -162,14 +190,11 @@ on post-fs
     # double check the perms, in case lost+found already exists, and set owner
     chown root root /cache/lost+found
     chmod 0770 /cache/lost+found
-    
-    chown system cache /cache/dalvik-cache
-    chmod 777 /cache/dalvik-cache
 
 on post-fs-data
-    # We chown/chmod /data again so because mount is run as root + defaults
+    # We chown/chmod /data again because mount is run as root + defaults
     chown system system /data
-    chmod 0777 /data
+    chmod 0771 /data
 
     # Create dump dir and collect dumps.
     # Do this before we mount cache so eventually we can use cache for
@@ -190,18 +215,35 @@ on post-fs-data
 
     write /proc/apanic_console 1
 
+    # Change permissions on vmallocinfo so we can grab it from bugreports
+    chown root log /proc/vmallocinfo
+    chmod 0440 /proc/vmallocinfo
+
+    # Change permissions on kmsg & sysrq-trigger so bugreports can grab kthread stacks
+    chown root system /proc/kmsg
+    chmod 0440 /proc/kmsg
+    chown root system /proc/sysrq-trigger
+    chmod 0220 /proc/sysrq-trigger
+
+    # Same reason as /data above
+    chown system cache /cache
+    chmod 0771 /cache
+
+    # Browser (TW) Same reason as /data above
+    chown system inet /app-cache
+    chmod 0771 /app-cache
+
     # GPS
     chown root system /dev/ttySAC1
     chmod 0660 /dev/ttySAC1
-    chown root system /sys/class/sec/gps/GPS_PWR_EN/value
-    chmod 0664 /sys/class/sec/gps/GPS_PWR_EN/value
-    chown root system /sys/class/sec/gps/GPS_nRST/value
-    chmod 0664 /sys/class/sec/gps/GPS_nRST/value
-    mkdir /data/gps 771 system system
-    chown system system /data/gps
+
+    # create data/gps for GPS demon
+    mkdir /data/gps 771 gps system
+    chown gps system /data/gps
+	
 
     # create basic filesystem structure
-    mkdir /data/misc 01771 system misc
+    mkdir /data/misc 01775 system misc
     mkdir /data/misc/bluetoothd 0770 bluetooth bluetooth
     mkdir /data/misc/bluetooth 0770 system system
     mkdir /data/misc/keystore 0700 keystore keystore
@@ -210,32 +252,51 @@ on post-fs-data
     mkdir /data/misc/systemkeys 0700 system system
     mkdir /data/misc/vpn/profiles 0770 system system
     mkdir /data/misc/radio 0775 radio system
-    # give system access to wpa_supplicant.conf for backup and restore
-    mkdir /data/misc/wifi 0770 wifi wifi
-    chmod 0770 /data/misc/wifi
-    chmod 0660 /data/misc/wifi/wpa_supplicant.conf
-    mkdir /data/local 777 shell shell
-    mkdir /data/local/tmp 0777 shell shell
-    mkdir /data/data 777 system system
-    mkdir /data/app-private 0777 system system
-    mkdir /data/app 777 system system
+    mkdir /data/local 0771 shell shell
+    mkdir /data/local/tmp 0771 shell shell
+    mkdir /data/data 0771 system system
+    mkdir /data/app-private 0771 system system
+    mkdir /data/app 0771 system system
     mkdir /data/property 0700 root root
+   
+    # for TRP/TIS
+    write /data/.psm.info 1
+    chown system system /data/.psm.info
+    chmod 0600 /data/.psm.info
 
-    # create dalvik-cache and double-check the perms
-    mkdir /data/dalvik-cache 777 system system
+    # create dalvik-cache and double-check the perms, so as to enforce our permissions
+    #mkdir /data/dalvik-cache 0771 system system
+    mkdir /data/dalvik-cache 0773 system system
     chown system system /data/dalvik-cache
-    chmod 777 /data/dalvik-cache
+    #chmod 0771 /data/dalvik-cache
+    chmod 0773 /data/dalvik-cache
 
-    # create the lost+found directories, so as to enforce our permissions
-    mkdir /data/lost+found 0770
+    #mkdir /cache/dalvik-cache 0771 system system
+    mkdir /cache/dalvik-cache 0773 system system
+    chown system system /cache/dalvik-cache
+    #chmod 0771 /cache/dalvik-cache
+    chmod 0773 /cache/dalvik-cache
 
-    # double check the perms, in case lost+found already exists, and set owner
+    # create lost+found and double-check the perms, so as to enforce our permissions
+    mkdir /data/lost+found 0770 root root
     chown root root /data/lost+found
     chmod 0770 /data/lost+found
+
+    # create /data/system and double-check the perms, so as to enforce our permissions
+    mkdir /data/system 0775 system system
+    chown system system /data/system
+    chmod 0775 /data/system
 
     # create directory for DRM plug-ins
     mkdir /data/drm 0774 drm drm
 
+    # Code changes for GB->ICS upgrade for U1/T1 models ...Moving .db file... starts
+    mkdir /data/system/databases 0771 system system
+    copy /data/data/com.sec.android.providers.drm/databases/drmdatabase.db /data/system/databases/drmdatabase.db
+    chown system system /data/system/databases/drmdatabase.db
+    chmod 0774 /data/system/databases/drmdatabase.db	
+    # Code changes for GB->ICS upgrade for U1/T1 models ...Moving .db file... ends	
+	
 #SISO-PLAYREADY-CHANGES
 #DRM directory creation
     mkdir /system/etc/security/.drm 0775
@@ -266,7 +327,16 @@ on post-fs-data
     chown media system /efs/.files/.mp301
     chmod 0775 /efs/.files/.dx1
     chmod 0775 /efs/.files/.dm33
-    chmod 0775 /efs/.files/.mp301
+    chmod 0775 /efs/.files/.mp301    
+
+	# Added for Playready DRM Support
+    mkdir /data/data/.drm 0775
+	chown media system /data/data/.drm
+    chmod 0775 /data/data/.drm
+	mkdir /data/data/.drm/.playready 0775
+	chown media system /data/data/.drm/.playready
+    chmod 0775 /data/data/.drm/.playready
+#SISO-PLAYREADY-CHANGES
 
     # If there is no fs-post-data action in the init.<device>.rc file, you
     # must uncomment this line, otherwise encrypted filesystems
@@ -286,11 +356,6 @@ on post-fs-data
 	chmod 0660 /dev/usb_mtp_gadget
 	chown system system /dev/usb_mtp_gadget
 
-# NFC
-    setprop ro.nfc.port "I2C"
-    chmod 0600 /dev/pn544
-    chown nfc nfc /dev/pn544
-
 # Added by Yamaha Corporation. -----------------------------------------
     # setup for alsa snd device
     chmod 0770 /dev/snd/pcmC0D0c
@@ -306,10 +371,13 @@ on post-fs-data
 
     chmod 0775 /data/log
     chmod 0775 /data/anr
-
+    
     chmod 0662 /dev/log/radio
     chmod 0662 /dev/log/main
     chmod 0662 /dev/log/event
+
+# Include extra init file
+    import /system/etc/init.local.rc
 
 on boot
 # basic network init
@@ -374,10 +442,29 @@ on boot
     write /proc/sys/vm/dirty_expire_centisecs 200
     write /proc/sys/vm/dirty_background_ratio  5
 
-#panorama directory creation
+    # permissions for NFC
+    setprop ro.nfc.port "I2C"
+    chmod 0600 /dev/pn544
+    chown nfc nfc /dev/pn544
+
+    # permissions for dpram
+    chmod 0666 /dev/dpram0
+    chmod 0666 /dev/dpram1
+    chmod 0666 /dev/dpramerr
+    chmod 0666 /dev/ttyCDMA0
+    chmod 0666 /dev/ttyCPLOG0
+    chown radio radio /dev/dpram0
+    chown radio radio /dev/dpram1
+    chown radio radio /dev/ttyCPLOG0
+
+    # panorama directory creation
     mkdir /data/pxtmpdir 0775
     chown system system /data/pxtmpdir
     chmod 0775 /data/pxtmpdir
+
+    chown radio radio /sys/devices/platform/sec-battery/power_supply/battery/browser
+    chown radio radio /sys/devices/platform/sec-battery/power_supply/battery/camera
+    chmod 0666 /sys/devices/platform/sec-battery/power_supply/battery/camera
 
     # permission for HDMI audio path
     chown media audio /sys/class/hdmi_audio/hdmi_audio/hdmi_audio_set_ext
@@ -390,7 +477,6 @@ on boot
     chown system radio /sys/devices/platform/i2c-gpio.9/i2c-9/9-0036/power_supply/fuelgauge/fg_read_soc
     chown system radio /sys/devices/platform/i2c-gpio.9/i2c-9/9-0036/power_supply/fuelgauge/fg_reset_soc
     chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_lpm_state
-    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/fg_psoc
     chown system radio /sys/devices/platform/sec-battery/power_supply/battery/system_rev
     chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_current_adc
     chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_test_value
@@ -408,6 +494,17 @@ on boot
     chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_vfocv
     chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_soc
     chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_vol
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_current_now
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_temp_radc
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/batt_tmu_status
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/current_avg
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/fg_soc
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/siop_activated
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/slate_test_mode
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/hotspot
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/data_call
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/call
+    chown system radio /sys/devices/platform/sec-battery/power_supply/battery/wimax
 
     # Permissions for System Server and daemons.
     chown radio system /sys/android_power/state
@@ -421,7 +518,13 @@ on boot
     chmod 0660 /sys/power/state
     chmod 0660 /sys/power/wake_lock
     chmod 0660 /sys/power/wake_unlock
-
+    chown system system /sys/devices/virtual/sec/sec_touchkey/brightness
+# factory test gaudi ICS changes - start
+    chown radio system /sys/devices/virtual/sec/sec_touchkey/touch_sensitivity
+    chown radio system /sys/class/lightsensor/switch_cmd/lightsensor_file_state
+    chown radio system /sys/devices/virtual/sec/sec_touchkey/touch_version
+    chown radio system /sys/devices/virtual/sec/sec_touchkey/autocal_enable
+# factory test gaudi ICS changes - end
     chown system system /sys/class/timed_output/vibrator/enable
     chown system system /sys/class/leds/keyboard-backlight/brightness
     chown system system /sys/class/leds/lcd-backlight/brightness
@@ -431,6 +534,9 @@ on boot
     chown system system /sys/class/leds/red/brightness
     chown system system /sys/class/leds/green/brightness
     chown system system /sys/class/leds/blue/brightness
+    chown system system /sys/class/leds/red/trigger
+    chown system system /sys/class/leds/green/trigger
+    chown system system /sys/class/leds/blue/trigger
     chown system system /sys/class/leds/red/device/grpfreq
     chown system system /sys/class/leds/red/device/grppwm
     chown system system /sys/class/leds/red/device/blink
@@ -449,50 +555,9 @@ on boot
     chown system system /sys/kernel/ipv4/tcp_rmem_def
     chown system system /sys/kernel/ipv4/tcp_rmem_max
     chown system system /sys/class/power_supply/battery/temp
+    chown system system /sys/class/proximity/proximity/proximity_avg
+    chown radio system /sys/class/sec/gsensorcal/calibration
     chown root radio /proc/cmdline
-
-# Permissions for input devices
-    chown system radio /sys/devices/virtual/sec/sec_key/sec_key_pressed
-
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/enable_disable
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/recommended_version
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touch_sensitivity
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/brightness
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touchkey_brightness
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touchkey_back
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touchkey_menu
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touchkey_firm_version_panel
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touchkey_firm_version_phone
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touchkey_firm_update_status
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/touchkey_firm_update
-    chown system radio /sys/devices/virtual/sec/sec_touchkey/updated_version
-
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_firm_version
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_threshould
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_all_delta
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_all_refer
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_delta4
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_refer4
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_delta3
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_refer3
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_delta2
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_refer2
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_delta1
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_refer1
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_delta0
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_refer0
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/disp_all_deltadata
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/disp_all_refdata
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_module_off
-    chown system radio /sys/devices/virtual/sec/tsp_noise_test/set_module_on
-
-    chown system radio /sys/devices/virtual/sec/sec_touchscreen/tsp_firm_version_panel
-    chown system radio /sys/devices/virtual/sec/sec_touchscreen/tsp_firm_version_phone
-    chown system radio /sys/devices/virtual/sec/sec_touchscreen/tsp_firm_update_status 
-    chown system radio /sys/devices/virtual/sec/sec_touchscreen/tsp_firm_update 
-    chown system radio /sys/devices/virtual/sec/sec_touchscreen/tsp_threshold
-    chown system radio /sys/devices/virtual/sec/sec_touchscreen/tsp_config_version
-    chown system radio /sys/devices/virtual/sec/sec_touchscreen/tsp_touchtype
 
 # Permissions for bluetooth
     setprop ro.bt.bdaddr_path "/efs/bluetooth/bt_addr"
@@ -521,44 +586,41 @@ on boot
 # Permissions for uart_sel and usb_sel
     chown system radio /sys/class/sec/switch/uart_sel/value
     chown system radio /sys/class/sec/switch/usb_sel
-    chown system radio /sys/class/sec/switch/audio_path
-    chown system radio /sys/class/sec/switch/otg_test
-    chown system radio /sys/class/sec/switch/adc_debounce_time
-    chown system radio /sys/class/sec/switch/status
     chown system radio /mnt/.lfs/sw_sel
 
-# Permissions for OTG Test
-	chown system radio /sys/class/host_notify/usb_otg/booster
-	chmod 0664 /sys/class/host_notify/usb_otg/booster
-
+chown radio system /sys/devices/platform/s3c2410-i2c.5/i2c-5/5-0066/max8997-muic/usb_sel
+	
 # Permission for radio
     chown system radio /sys/devices/platform/s5p-ehci/ehci_power
     chown system radio /sys/devices/platform/s5p-ehci/ehci_runtime
-    chown system radio /sys/devices/virtual/misc/multipdp/waketime
+
+# allow system to modify cpufreq control files
+    chown root system /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+    chmod 0664 /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+    chown root system /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+    chmod 0664 /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+    chown root system /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
+    chmod 0664 /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
 
 # Define TCP buffer sizes for various networks
 #   ReadMin, ReadInitial, ReadMax, WriteMin, WriteInitial, WriteMax,
     setprop net.tcp.buffersize.default 4096,87380,110208,4096,16384,110208
-#    setprop net.tcp.buffersize.wifi    4095,87380,110208,4096,16384,110208
-    setprop net.tcp.buffersize.wifi    4095,131072,196608,4096,16384,110208
+    setprop net.tcp.buffersize.wifi    4095,87380,110208,4096,16384,110208
     setprop net.tcp.buffersize.umts    4094,87380,110208,4096,16384,110208
     setprop net.tcp.buffersize.edge    4093,26280,35040,4096,16384,35040
     setprop net.tcp.buffersize.gprs    4092,8760,11680,4096,8760,11680
+    setprop net.tcp.buffersize.wimax   4096,524288,1048576,4096,16384,110208
 
 # +++++++++++++++++++++++++++++++++++++++++++
 # for datarouter
-    chown system system /dev/dun
     chown system system /dev/ttyGS0
-    chown system system /dev/ttyGS1
-    chown system system /dev/ttyGS2
-    chown system system /dev/ttyGS3
+    chown system system /dev/dun
 # +++++++++++++++++++++++++++++++++++++++++++
 
-
-#RTC_Log
+# RTC logging daemon
     chmod 0770 /system/bin/rtc_log.sh
     chown system system /system/bin/rtc_log.sh
-#RTC_Log
+# RTC_Log
 
 # Set this property so surfaceflinger is not started by system_init
     setprop system_init.startsurfaceflinger 0
@@ -630,14 +692,20 @@ on property:sys.usb.config=accessory,adb
 on property:persist.sys.usb.config=*
     setprop sys.usb.config $persist.sys.usb.config
 
+on property:persist.service.slate_mode=1
+    write /sys/class/power_supply/battery/slate_test_mode 1
+
+on property:persist.service.slate_mode=0
+    write /sys/class/power_supply/battery/slate_test_mode 0
+
 # DVFS - cpufreq ondemand
     write /sys/devices/system/cpu/cpufreq/ondemand/down_differential 5
     write /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 85
 
 # DVFS - limit cpufreq during booting sequence
     write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor userspace
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed 800000
-    write /data/dvfs "sleep 40 && echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed 1000000
+    write /data/dvfs "sleep 10 && echo 800000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed && sleep 40 && echo ondemand > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
     chmod 0770 /data/dvfs
 
 ## Daemon processes to be run by init.
@@ -654,6 +722,78 @@ service console /system/bin/sh
 
 on property:ro.debuggable=1
     start console
+
+ # MTP permission, fixed by 2011/03/18 ******++
+    chmod 0660 /dev/usb_mtp_gadget
+    chown system system /dev/usb_mtp_gadget
+
+    # USB Device permission
+    #chown system system /sys/devices/platform/android_usb/UsbMenuSel
+    chown system system /sys/devices/platform/android_usb/tethering
+	chown radio system /sys/devices/platform/android_usb/UsbMenuSel
+
+    # USB HUB permission
+    chown radio radio /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port
+
+    # USB switch permission
+    chown radio radio /sys/class/sec/switch/set_usb_path
+
+# Samsung USB Mode : system properties are linked with sysfs
+# write /sys/class/sec/switch/UsbMenuSel 0
+on property:persist.service.usb.setting=0
+	write /sys/devices/platform/android_usb/UsbMenuSel 0
+on property:persist.service.usb.setting=1
+	write /sys/devices/platform/android_usb/UsbMenuSel 1
+on property:persist.service.usb.setting=2
+	write /sys/devices/platform/android_usb/UsbMenuSel 2
+on property:persist.service.usb.setting=3
+	write /sys/devices/platform/android_usb/UsbMenuSel 3
+on property:persist.service.usb.setting=4
+	write /sys/devices/platform/android_usb/UsbMenuSel 4
+
+# USB HUB : system properties are linked with sysfs
+#  bit :    3     2      1         0
+#          AP,   CP, WIMAX, RESERVED
+# Enable AP, CP, WIMAX
+
+on property:persist.service.usb.hubport=0
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_ap
+	write /sys/class/sec/switch/set_usb_path ALL
+on property:persist.service.usb.hubport=2
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_ap
+	write /sys/class/sec/switch/set_usb_path ALL
+on property:persist.service.usb.hubport=4
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_ap
+	write /sys/class/sec/switch/set_usb_path AP
+on property:persist.service.usb.hubport=6
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_ap
+	write /sys/class/sec/switch/set_usb_path AP
+on property:persist.service.usb.hubport=8
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_ap
+	write /sys/class/sec/switch/set_usb_path CP
+on property:persist.service.usb.hubport=10
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enalbe_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_ap
+	write /sys/class/sec/switch/set_usb_path CP
+on property:persist.service.usb.hubport=12
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port enable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_ap
+on property:persist.service.usb.hubport=14
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_wimax
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_cp
+	write /sys/devices/platform/i2c-gpio.17/i2c-17/17-0008/port disable_ap
 
 # adbd is controlled via property triggers in init.<platform>.usb.rc
 service adbd /sbin/adbd
@@ -705,6 +845,12 @@ service ril-daemon /system/bin/rild
     user root
     group radio cache inet misc audio sdcard_rw log
 
+service gpsd /system/bin/gpsd
+    class main   
+    user system
+    group system inet
+	
+
 service DR-deamon /system/bin/drexe
     class main
     user root
@@ -740,6 +886,22 @@ service media /system/bin/mediaserver
     group system audio camera inet net_bt net_bt_admin
     ioprio rt 4
 
+# Run init.d scripts
+service sysinit /system/bin/logwrapper /sbin/run-parts /system/etc/init.d
+    class main
+    user root
+    group shell
+    oneshot
+
+# Samsung boot animation
+service samsungani /system/bin/samsungani
+    class main
+    user graphics
+    group graphics
+    disabled
+    oneshot
+
+# CM boot animation
 service bootanim /system/bin/bootanimation
     class main
     user graphics
@@ -747,14 +909,14 @@ service bootanim /system/bin/bootanimation
     disabled
     oneshot
 
-#for samsung boot sound
+# for samsung boot sound
 service playsound /system/bin/playsound
 	class main
 	user media
 	group system
 	disabled
 	oneshot
-#for samsung boot sound
+# for samsung boot sound
 
 service dbus /system/bin/dbus-daemon --system --nofork
     class main
@@ -793,6 +955,18 @@ service dhcpcd_bnep0 /system/bin/dhcpcd -ABKL
 	disabled
 	oneshot
 
+# Wimax changes
+service dhcpcd_uwbr0 /system/bin/dhcpcd -ABKL
+    class main
+    disabled
+    oneshot
+
+# wimax
+service iprenew_uwbr0 /system/bin/dhcpcd -n
+    class main
+    disabled
+    oneshot
+
 service installd /system/bin/installd
     class main
     socket installd stream 600 system system
@@ -829,24 +1003,6 @@ service dumpstate /system/bin/dumpstate -s
     disabled
     oneshot
 
-#for WiFi MFG(TestMode)
-service mfgloader /system/bin/mfgloader
-	class main
-	disabled
-	oneshot
-
-service wlandutservice /system/bin/wlandutservice
-	class main
-	user system
-	group wifi net_raw net_admin system inet
-	disabled
-	oneshot
-
-service macloader /system/bin/macloader
-	class main
-	oneshot
-# end of wifi
-
 # Vibetonz
 service immvibed /system/bin/immvibed
     class core
@@ -856,15 +1012,15 @@ service immvibed /system/bin/immvibed
 
 # TVout
 service TvoutService_C /system/bin/bintvoutservice
-     class main
-     user system
-     group graphics
-
-#RTC_Log
-service rtc_log /system/bin/sh /system/bin/rtc_log.sh
     class main
     user system
-    group system
+    group graphics
+
+# RTC logging daemon 
+service rtc_log /system/bin/sh /system/bin/rtc_log.sh
+    class main
+    user shell
+    group log
     oneshot
 
 # DVFS - limit cpufreq during booting sequence
@@ -879,3 +1035,11 @@ service bugreport /system/bin/bugmailer.sh -v
 	disabled
 	oneshot
 	keycodes 114 115 116
+
+# adb over network
+on property:service.adb.tcp.port=5555
+    stop adbd
+    start adbd
+on property:service.adb.tcp.port=-1
+    stop adbd
+    start adbd

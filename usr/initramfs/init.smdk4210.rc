@@ -3,17 +3,19 @@ import init.smdk4210.usb.rc
 on early-init
     export EXTERNAL_STORAGE /mnt/sdcard
     mkdir /mnt/sdcard 0000 system system
-    # for backwards compatibility
+    # backwards compat
     symlink /mnt/sdcard /sdcard
 
 on post-fs-data
     # give system access to wpa_supplicant.conf for backup and restore
     mkdir /data/misc/wifi 0770 wifi wifi
+    chown wifi wifi /data/misc/wifi
     chmod 0770 /data/misc/wifi
     chmod 0660 /data/misc/wifi/wpa_supplicant.conf
     mkdir /data/misc/wifi/sockets 0770 wifi wifi
-    mkdir /data/misc/dhcp 0770 dhcp dhcp
+    mkdir /data/misc/dhcp 0775 dhcp dhcp
     chown dhcp dhcp /data/misc/dhcp
+    chmod 0775 /data/misc/dhcp
 
 on boot
     chown system system /sys/class/backlight/pwm-backlight/brightness
@@ -21,7 +23,7 @@ on boot
     chown radio system /sys/devices/virtual/misc/melfas_touchkey/brightness
     chmod 0660 /sys/devices/virtual/misc/melfas_touchkey/brightness
 
-#panorama directory creation
+# panorama directory creation (TW)
     mkdir /data/pxtmpdir 0775
     chown system system /data/pxtmpdir
     chmod 0775 /data/pxtmpdir
@@ -34,8 +36,8 @@ on boot
 
     mount debugfs /sys/kernel/debug /sys/kernel/debug
 
-    setprop ro.build.product GT-I9100
-    setprop ro.product.device GT-I9100
+    setprop ro.build.product SPH-D710
+    setprop ro.product.device SPH-D710
     setprop ro.radio.noril yes
 
 # Permisions for sensors
@@ -81,7 +83,7 @@ service wpa_supplicant /system/bin/wpa_supplicant \
     disabled
     oneshot
 
-#for WiFi MFG(TestMode)
+# for WiFi MFG(TestMode)
 service mfgloader /system/bin/mfgloader
     disabled
     oneshot
@@ -115,5 +117,17 @@ service iprenew_p2p /system/bin/dhcpcd -n
     class main
     disabled
     oneshot
-    
-	
+
+service pppd_cdma /system/bin/pppd_runner
+    class main
+    user root
+    group radio cache inet misc system
+    disabled
+    oneshot
+
+on property:ril.cdma.data_state=1
+    start pppd_cdma
+    setprop ril.cdma.data_state 2
+
+on property:ril.cdma.data_state=0
+    stop pppd_cdma
